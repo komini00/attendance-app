@@ -58,11 +58,16 @@ def get_gsheet():
     try:
         sheet = client.open(SHEET_NAME).sheet1
     except gspread.SpreadsheetNotFound:
-        # 시트가 없으면 새로 생성
-        spreadsheet = client.create(SHEET_NAME)
-        spreadsheet.share("", perm_type="anyone", role="writer")
-        sheet = spreadsheet.sheet1
-        sheet.append_row(["이름", "학번", "학과", "학년", "조", "사진(base64)", "제출일시"])
+        st.error(
+            f"⚠️ '{SHEET_NAME}' 스프레드시트를 찾을 수 없습니다.\n\n"
+            "**설정 방법:**\n\n"
+            "1. Google Sheets에서 새 스프레드시트 생성\n"
+            f"2. 이름을 **{SHEET_NAME}**(으)로 변경\n"
+            "3. 첫 행에 헤더 입력: 이름 | 학번 | 학과 | 학년 | 조 | 사진(base64) | 제출일시\n"
+            f"4. 공유 버튼 → 아래 이메일을 **편집자**로 추가\n\n"
+            f"`{creds_dict.get('client_email', '확인필요')}`"
+        )
+        st.stop()
 
     return sheet
 
