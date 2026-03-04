@@ -24,14 +24,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 PHOTO_SIZE = (300, 400)  # 3:4 비율
 ADMIN_PASSWORD = st.secrets.get("admin_password", "admin1234")
 SHEET_NAME = st.secrets.get("sheet_name", "출석부")
-
-COURSES = [
-    "우정과관계의글로벌비지니스",
-    "생성형AI실무",
-    "항공서비스의이해",
-    "전공진로탐색",
-    "취창업세미나",
-]
+COURSES = list(st.secrets.get("courses", ["수업1", "수업2"]))
 
 # ─── 한글 폰트 등록 ──────────────────────────────────────
 FONT_PATHS = [
