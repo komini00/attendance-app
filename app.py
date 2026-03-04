@@ -107,8 +107,8 @@ def add_student(name: str, student_id: str, department: str, year: int, group: i
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 중복 학번 → 해당 행 업데이트
-    try:
-        cell = sheet.find(student_id, in_column=2)
+    cell = sheet.find(student_id, in_column=2)
+    if cell:
         sheet.update_cell(cell.row, 1, name)
         sheet.update_cell(cell.row, 3, department)
         sheet.update_cell(cell.row, 4, year)
@@ -116,17 +116,17 @@ def add_student(name: str, student_id: str, department: str, year: int, group: i
         sheet.update_cell(cell.row, 6, photo_b64)
         sheet.update_cell(cell.row, 7, now)
         return "updated"
-    except gspread.exceptions.CellNotFound:
+    else:
         sheet.append_row([name, student_id, department, year, group, photo_b64, now])
         return "created"
 
 
 def delete_student(student_id: str):
     sheet = get_gsheet()
-    try:
-        cell = sheet.find(student_id, in_column=2)
+    cell = sheet.find(student_id, in_column=2)
+    if cell:
         sheet.delete_rows(cell.row)
-    except gspread.exceptions.CellNotFound:
+    else:
         pass
 
 
