@@ -14,8 +14,9 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage, PageBreak
 )
+from itertools import groupby
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -171,6 +172,11 @@ def generate_pdf(students: list[dict], title: str = "출석부") -> bytes:
 
     elements = [Paragraph(title, title_style), Spacer(1, 0.5 * cm)]
 
+    group_title_style = ParagraphStyle(
+        "KorGroupTitle", parent=styles["Heading2"],
+        fontName=FONT_NAME, fontSize=14, leading=20,
+    )
+
     headers = [
         Paragraph("번호", header_style),
         Paragraph("사진", header_style),
@@ -178,12 +184,11 @@ def generate_pdf(students: list[dict], title: str = "출석부") -> bytes:
         Paragraph("이름", header_style),
         Paragraph("학과", header_style),
         Paragraph("학년", header_style),
-        Paragraph("조", header_style),
     ]
 
     photo_w, photo_h = 2.5 * cm, 3.3 * cm
     row_height = 3.6 * cm
-    col_widths = [1.0 * cm, 2.8 * cm, 2.8 * cm, 2.2 * cm, 4.0 * cm, 1.5 * cm, 1.5 * cm]
+    col_widths = [1.0 * cm, 2.8 * cm, 2.8 * cm, 2.2 * cm, 4.0 * cm, 1.5 * cm]
 
     usable_height = A4[1] - 3 * cm - 2 * cm
     rows_per_page = max(int(usable_height / row_height) - 1, 6)
@@ -191,46 +196,61 @@ def generate_pdf(students: list[dict], title: str = "출석부") -> bytes:
     # 임시 디렉토리에 사진 저장 (ReportLab이 파일 경로 필요)
     tmp_dir = tempfile.mkdtemp()
 
-    for page_start in range(0, len(students), rows_per_page):
-        if page_start > 0:
-            elements.append(Spacer(1, 0.3 * cm))
+    # 조별 그룹화 → 조 내에서 학년순 정렬
+    sorted_students = sorted(students, key=lambda s: (s.get("group", 0), s.get("year", 1)))
+    grouped = groupby(sorted_students, key=lambda s: s.get("group", 0))
 
-        page_students = students[page_start:page_start + rows_per_page]
-        data = [headers]
+    first_group = True
+    for group_num, group_students_iter in grouped:
+        group_students = list(group_students_iter)
 
-        for idx, s in enumerate(page_students, start=page_start + 1):
-            photo_data = b64_to_photo_bytes(s.get("photo_b64", ""))
-            if photo_data:
-                tmp_path = os.path.join(tmp_dir, f"{s['student_id']}.jpg")
-                with open(tmp_path, "wb") as f:
-                    f.write(photo_data)
-                img = RLImage(tmp_path, width=photo_w, height=photo_h)
-            else:
-                img = Paragraph("사진 없음", cell_style)
+        if not first_group:
+            elements.append(PageBreak())
+        first_group = False
 
-            group_str = f"{s['group']}조" if s.get("group") else "-"
-            data.append([
-                Paragraph(str(idx), cell_style),
-                img,
-                Paragraph(s["student_id"], cell_style),
-                Paragraph(s["name"], cell_style),
-                Paragraph(s["department"], cell_style),
-                Paragraph(str(s["year"]), cell_style),
-                Paragraph(group_str, cell_style),
-            ])
+        group_label = f"{group_num}조" if group_num else "미배정"
+        elements.append(Paragraph(f"{group_label} ({len(group_students)}명)", group_title_style))
+        elements.append(Spacer(1, 0.3 * cm))
 
-        table = Table(data, colWidths=col_widths,
-                      rowHeights=[1 * cm] + [row_height] * len(page_students))
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            *[("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F8F9FA"))
-              for i in range(2, len(data), 2)],
-        ]))
-        elements.append(table)
+        # 조 인원이 한 페이지 초과 시 분할
+        for page_start in range(0, len(group_students), rows_per_page):
+            if page_start > 0:
+                elements.append(Spacer(1, 0.3 * cm))
+
+            page_students = group_students[page_start:page_start + rows_per_page]
+            data = [headers]
+
+            for idx, s in enumerate(page_students, start=page_start + 1):
+                photo_data = b64_to_photo_bytes(s.get("photo_b64", ""))
+                if photo_data:
+                    tmp_path = os.path.join(tmp_dir, f"{s['student_id']}.jpg")
+                    with open(tmp_path, "wb") as f:
+                        f.write(photo_data)
+                    img = RLImage(tmp_path, width=photo_w, height=photo_h)
+                else:
+                    img = Paragraph("사진 없음", cell_style)
+
+                data.append([
+                    Paragraph(str(idx), cell_style),
+                    img,
+                    Paragraph(s["student_id"], cell_style),
+                    Paragraph(s["name"], cell_style),
+                    Paragraph(s["department"], cell_style),
+                    Paragraph(str(s["year"]), cell_style),
+                ])
+
+            table = Table(data, colWidths=col_widths,
+                          rowHeights=[1 * cm] + [row_height] * len(page_students))
+            table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                *[("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F8F9FA"))
+                  for i in range(2, len(data), 2)],
+            ]))
+            elements.append(table)
 
     doc.build(elements)
     return buf.getvalue()
