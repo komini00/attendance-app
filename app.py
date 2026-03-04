@@ -1,5 +1,4 @@
 import streamlit as st
-import json
 import os
 import io
 import base64
@@ -26,6 +25,14 @@ PHOTO_SIZE = (300, 400)  # 3:4 비율
 ADMIN_PASSWORD = st.secrets.get("admin_password", "admin1234")
 SHEET_NAME = st.secrets.get("sheet_name", "출석부")
 
+COURSES = [
+    "우정과관계의글로벌비지니스",
+    "생성형AI실무",
+    "항공서비스의이해",
+    "전공진로탐색",
+    "취창업세미나",
+]
+
 # ─── 한글 폰트 등록 ──────────────────────────────────────
 FONT_PATHS = [
     "C:/Windows/Fonts/malgun.ttf",
@@ -46,8 +53,8 @@ if not _font_registered:
 
 # ─── Google Sheets 연결 ──────────────────────────────────
 @st.cache_resource
-def get_gsheet():
-    """Google Sheets 연결을 반환합니다."""
+def get_spreadsheet():
+    """Google Sheets 스프레드시트 객체를 반환합니다."""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -57,28 +64,38 @@ def get_gsheet():
     client = gspread.authorize(creds)
 
     try:
-        sheet = client.open(SHEET_NAME).sheet1
+        spreadsheet = client.open(SHEET_NAME)
     except gspread.SpreadsheetNotFound:
         st.error(
             f"⚠️ '{SHEET_NAME}' 스프레드시트를 찾을 수 없습니다.\n\n"
             "**설정 방법:**\n\n"
             "1. Google Sheets에서 새 스프레드시트 생성\n"
             f"2. 이름을 **{SHEET_NAME}**(으)로 변경\n"
-            "3. 첫 행에 헤더 입력: 이름 | 학번 | 학과 | 학년 | 조 | 사진(base64) | 제출일시\n"
-            f"4. 공유 버튼 → 아래 이메일을 **편집자**로 추가\n\n"
+            f"3. 공유 버튼 → 아래 이메일을 **편집자**로 추가\n\n"
             f"`{creds_dict.get('client_email', '확인필요')}`"
         )
         st.stop()
 
+    return spreadsheet
+
+
+HEADERS = ["이름", "학번", "학과", "학년", "조", "사진(base64)", "제출일시"]
+
+
+def get_course_sheet(course: str):
+    """수업별 워크시트를 반환합니다. 없으면 자동 생성."""
+    spreadsheet = get_spreadsheet()
+    try:
+        sheet = spreadsheet.worksheet(course)
+    except gspread.WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(title=course, rows=1000, cols=7)
+        sheet.append_row(HEADERS)
     return sheet
 
 
 # ─── 데이터 관리 (Google Sheets) ─────────────────────────
-HEADERS = ["이름", "학번", "학과", "학년", "조", "사진(base64)", "제출일시"]
-
-
-def load_students() -> list[dict]:
-    sheet = get_gsheet()
+def load_students(course: str) -> list[dict]:
+    sheet = get_course_sheet(course)
     rows = sheet.get_all_records()
     students = []
     for r in rows:
@@ -95,7 +112,7 @@ def load_students() -> list[dict]:
     return students
 
 
-def add_student(name: str, student_id: str, department: str, year: int, group: int, photo_bytes: bytes):
+def add_student(course: str, name: str, student_id: str, department: str, year: int, group: int, photo_bytes: bytes):
     # 사진 리사이즈 → base64
     img = Image.open(io.BytesIO(photo_bytes))
     img = img.convert("RGB")
@@ -104,7 +121,7 @@ def add_student(name: str, student_id: str, department: str, year: int, group: i
     img.save(buf, format="JPEG", quality=85)
     photo_b64 = base64.b64encode(buf.getvalue()).decode()
 
-    sheet = get_gsheet()
+    sheet = get_course_sheet(course)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 중복 학번 → 해당 행 업데이트
@@ -122,17 +139,15 @@ def add_student(name: str, student_id: str, department: str, year: int, group: i
         return "created"
 
 
-def delete_student(student_id: str):
-    sheet = get_gsheet()
+def delete_student(course: str, student_id: str):
+    sheet = get_course_sheet(course)
     cell = sheet.find(student_id, in_column=2)
     if cell:
         sheet.delete_rows(cell.row)
-    else:
-        pass
 
 
-def clear_all():
-    sheet = get_gsheet()
+def clear_course(course: str):
+    sheet = get_course_sheet(course)
     sheet.clear()
     sheet.append_row(HEADERS)
 
@@ -169,13 +184,12 @@ def generate_pdf(students: list[dict], title: str = "출석부") -> bytes:
         fontName=FONT_NAME, fontSize=10, leading=14,
         alignment=1, textColor=colors.white,
     )
-
-    elements = [Paragraph(title, title_style), Spacer(1, 0.5 * cm)]
-
     group_title_style = ParagraphStyle(
         "KorGroupTitle", parent=styles["Heading2"],
         fontName=FONT_NAME, fontSize=14, leading=20,
     )
+
+    elements = [Paragraph(title, title_style), Spacer(1, 0.5 * cm)]
 
     headers = [
         Paragraph("번호", header_style),
@@ -278,6 +292,8 @@ if page == "📝 정보 입력":
     st.write("아래 양식을 작성하고 사진을 업로드해 주세요.")
 
     with st.form("student_form", clear_on_submit=True):
+        course = st.selectbox("수업 선택 *", COURSES)
+
         col1, col2 = st.columns(2)
         with col1:
             name = st.text_input("이름 *", placeholder="홍길동")
@@ -301,7 +317,7 @@ if page == "📝 정보 입력":
                 st.error("모든 항목을 입력해 주세요.")
             else:
                 with st.spinner("제출 중..."):
-                    result = add_student(name, student_id, department, year, group, photo.read())
+                    result = add_student(course, name, student_id, department, year, group, photo.read())
                 if result == "updated":
                     st.warning(f"학번 {student_id}의 기존 정보를 업데이트했습니다.")
                 else:
@@ -323,6 +339,9 @@ elif page == "🔒 관리자":
             else:
                 st.error("비밀번호가 틀렸습니다.")
     else:
+        # ── 수업 선택 ──
+        selected_course = st.selectbox("수업 선택", COURSES)
+
         # ── QR코드 / 링크 공유 ──
         with st.expander("📱 학생 접속 QR코드", expanded=False):
             app_url = st.text_input(
@@ -344,8 +363,8 @@ elif page == "🔒 관리자":
 
         # ── 학생 목록 ──
         with st.spinner("데이터 불러오는 중..."):
-            students = load_students()
-        st.write(f"**등록된 학생: {len(students)}명**")
+            students = load_students(selected_course)
+        st.write(f"**[{selected_course}] 등록된 학생: {len(students)}명**")
 
         if st.button("🔄 새로고침"):
             st.cache_resource.clear()
@@ -357,7 +376,7 @@ elif page == "🔒 관리자":
             # PDF 다운로드
             col_a, col_b = st.columns([2, 1])
             with col_a:
-                pdf_title = st.text_input("출석부 제목", value="2026학년도 1학기 출석부")
+                pdf_title = st.text_input("출석부 제목", value=f"2026학년도 1학기 {selected_course} 출석부")
             with col_b:
                 st.write("")
                 st.write("")
@@ -370,7 +389,7 @@ elif page == "🔒 관리자":
                 st.download_button(
                     "⬇️ PDF 다운로드",
                     data=st.session_state.pdf_data,
-                    file_name="출석부.pdf",
+                    file_name=f"출석부_{selected_course}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
                 )
@@ -399,15 +418,15 @@ elif page == "🔒 관리자":
                         st.write(f"{s['group']}조" if s.get("group") else "-")
                     with cols[6]:
                         if st.button("🗑️", key=f"del_{s['student_id']}"):
-                            delete_student(s["student_id"])
+                            delete_student(selected_course, s["student_id"])
                             st.cache_resource.clear()
                             st.rerun()
                     st.divider()
 
             # 전체 초기화
             with st.expander("⚠️ 위험 영역"):
-                if st.button("전체 데이터 초기화", type="secondary"):
-                    clear_all()
+                if st.button(f"'{selected_course}' 데이터 초기화", type="secondary"):
+                    clear_course(selected_course)
                     st.cache_resource.clear()
                     st.session_state.pop("pdf_data", None)
                     st.rerun()
