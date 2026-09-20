@@ -5,7 +5,7 @@ import base64
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 import qrcode
 import gspread
 from google.oauth2.service_account import Credentials
@@ -106,10 +106,22 @@ def load_students(course: str) -> list[dict]:
 
 
 def add_student(course: str, name: str, student_id: str, department: str, year: int, group: int, photo_bytes: bytes):
-    # 사진 리사이즈 → base64
+    # 사진 방향 보정 + 3:4 세로 크롭 + 리사이즈 → base64
     img = Image.open(io.BytesIO(photo_bytes))
+    img = ImageOps.exif_transpose(img)  # 스마트폰 회전 메타데이터 반영
     img = img.convert("RGB")
-    img.thumbnail(PHOTO_SIZE, Image.LANCZOS)
+    # 3:4 비율로 중앙 크롭 (PDF 셀이 세로 고정이라 비율이 다르면 얼굴이 찌그러짐)
+    target_ratio = PHOTO_SIZE[0] / PHOTO_SIZE[1]
+    w, h = img.size
+    if w / h > target_ratio:
+        new_w = round(h * target_ratio)
+        left = (w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, h))
+    elif w / h < target_ratio:
+        new_h = round(w / target_ratio)
+        top = (h - new_h) // 2
+        img = img.crop((0, top, w, top + new_h))
+    img = img.resize(PHOTO_SIZE, Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     photo_b64 = base64.b64encode(buf.getvalue()).decode()
