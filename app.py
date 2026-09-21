@@ -122,9 +122,16 @@ def add_student(course: str, name: str, student_id: str, department: str, year: 
         top = (h - new_h) // 2
         img = img.crop((0, top, w, top + new_h))
     img = img.resize(PHOTO_SIZE, Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    photo_b64 = base64.b64encode(buf.getvalue()).decode()
+    # Google Sheets 셀 한도(50,000자) 이내로 압축 — 넘으면 품질을 낮추고, 그래도 크면 축소
+    MAX_B64_LEN = 45000
+    for size, quality in [(PHOTO_SIZE, 85), (PHOTO_SIZE, 70), (PHOTO_SIZE, 55),
+                          ((225, 300), 70), ((225, 300), 55), ((150, 200), 60)]:
+        resized = img if size == img.size else img.resize(size, Image.LANCZOS)
+        buf = io.BytesIO()
+        resized.save(buf, format="JPEG", quality=quality)
+        photo_b64 = base64.b64encode(buf.getvalue()).decode()
+        if len(photo_b64) <= MAX_B64_LEN:
+            break
 
     sheet = get_course_sheet(course)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -318,15 +325,21 @@ if page == "📝 정보 입력":
         submitted = st.form_submit_button("✅ 제출", use_container_width=True)
 
         if submitted:
-            if not name or not student_id or not department or not photo:
-                st.error("모든 항목을 입력해 주세요.")
+            missing = [label for label, v in [("이름", name), ("학번", student_id),
+                                              ("학과", department), ("증명사진", photo)] if not v]
+            if missing:
+                st.error(f"다음 항목을 입력해 주세요: {', '.join(missing)}")
             else:
-                with st.spinner("제출 중..."):
-                    result = add_student(course, name, student_id, department, year, group, photo.read())
-                if result == "updated":
-                    st.warning(f"학번 {student_id}의 기존 정보를 업데이트했습니다.")
+                try:
+                    with st.spinner("제출 중..."):
+                        result = add_student(course, name, student_id, department, year, group, photo.read())
+                except Exception:
+                    st.error("제출 중 오류가 발생했습니다. 잠시 후 한 번만 다시 제출해 주세요. 계속 실패하면 교수님께 알려주세요.")
                 else:
-                    st.success(f"✅ {name}님의 정보가 제출되었습니다!")
+                    if result == "updated":
+                        st.warning(f"학번 {student_id}의 기존 정보를 업데이트했습니다.")
+                    else:
+                        st.success(f"✅ {name}님의 정보가 제출되었습니다!")
 
 # ── 관리자 페이지 ──
 elif page == "🔒 관리자":
